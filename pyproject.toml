@@ -1,0 +1,23 @@
+[project]
+name = "parsingtool"
+version = "0.1.0"
+description = "PDF-to-CSV parsing tool with optional OCR fallback"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas",
+  "pymupdf",
+  "pdfminer.six",
+  "PyPDF2",
+  "pytesseract",
+  "pdf2image",
+  "Pillow",
+]
+
+[project.scripts]
+parsingtool = "ParsingTool.parsing.cli:main"
+parsingtool-gui = "ParsingTool.parsing.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
