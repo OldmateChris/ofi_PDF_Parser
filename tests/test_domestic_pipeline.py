@@ -1,5 +1,4 @@
 # tests/test_domestic_pipeline.py
-from pathlib import Path
 from ParsingTool.parsing.domestic_zapi import pipeline as dom
 
 def test_domestic_pipeline_happy_path(tmp_path, monkeypatch):
@@ -11,7 +10,7 @@ def test_domestic_pipeline_happy_path(tmp_path, monkeypatch):
     Date requested: 09/02/2025
     Requested by: Alice QA
 
-    Batch Number: BATCH-42
+    Batch Number: F013561001
     OLAM Ref: OL-777
     SSCC Qty: 2
     Product: Variety: Gala   Grade: A1   Size: 100-110   Packaging: Box
@@ -37,5 +36,5 @@ def test_domestic_pipeline_happy_path(tmp_path, monkeypatch):
 
     assert "Batch Number" in batches[0]
     assert "SSCC" in sscc[0]
-    assert any("BATCH-42" in line for line in batches[1:])
+    assert any("F013561001" in line for line in batches[1:])
     assert any("003123456789012345" in line for line in sscc[1:])

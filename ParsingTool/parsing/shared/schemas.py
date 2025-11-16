@@ -2,8 +2,6 @@
 # Feel free to import these in your pipeline modules and writers
 
 BATCHES_COLUMNS = [
-    "Requested By",
-    "Date Requested",
     "Picking Request Number",
     "Delivery Number",
     "OLAM Ref Number",
@@ -12,22 +10,13 @@ BATCHES_COLUMNS = [
     "Customer Delivery Date",
     "Customer",
     "Customer/Delivery Address",
-    "Date of Pick Up",
-    "Total Days In Transit",
     "Plant/Storage Location",
-    "Inspection Type",
-    "Inspection progress",
-    "Inspection Status",
-    "Inspection Date",
     "Variety",
     "Grade",
     "Size",
     "Packaging",
-    "Total Gross Weight",
-    "Pallet",
-    "Comments",
-    "Non-Conformance",
 ]
+
 
 SSCC_COLUMNS = [
     "Delivery Number",
