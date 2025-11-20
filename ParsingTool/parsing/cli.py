@@ -2,6 +2,7 @@ import argparse, sys
 from .domestic_zapi.pipeline import run as run_domestic
 from .export_orders.pipeline import run as run_export
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="parsingtool", description="Parsing Tool CLI")
     sub = p.add_subparsers(dest="command")  # not required=True
@@ -15,6 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_exp.add_argument("input_pdf")
     p_exp.add_argument("--out", required=True)
     return p
+
 
 def main() -> None:
     parser = build_parser()
@@ -37,11 +39,11 @@ def main() -> None:
 
     if args.command == "export":
         run_export(input_pdf=args.input_pdf, out=args.out)
-    return
-
+        return
 
     parser.print_help()
     sys.exit(0)
+
 
 if __name__ == "__main__":
     main()

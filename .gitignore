@@ -31,3 +31,6 @@ qc_report.md
 # PDFs & heavy assets (avoid committing real docs)
 samples/*.pdf
 *.pdf
+
+# Pytest cache
+.pytest_cache/
