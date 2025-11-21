@@ -1,45 +1,78 @@
+"""Export-orders pipeline using shared EXPORT_FIELD_PATTERNS.
+
+This module parses an export-order PDF into a one-row CSV. It relies on the
+shared EXPORT_FIELD_PATTERNS so that the regex definitions are centralised
+and consistent with the simple `parse_pdf` helper.
+"""
+
 from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict
 import re
-from typing import Dict, List
+
+import pandas as pd
 
 from ..shared.pdf_utils import extract_text
-from ..shared.csv_writer import write_csv
-from ..shared.schemas import EXPORT_COLUMNS
+from ..shared.export_patterns import EXPORT_FIELD_PATTERNS
+from ..qc import EXPECTED_COLUMNS
 
-LINE = r"([^\n]+)"  # helper for 'rest of line'
+# Backwards-compat alias: some existing code may still import FIELD_PATTERNS
+FIELD_PATTERNS = EXPORT_FIELD_PATTERNS
 
-FIELD_PATTERNS: Dict[str, str] = {
-    "Name": rf"^\s*Name[:\s]+{LINE}$",
-    "Date Requested": r"^\s*Date\s*Requested[:\s]+([\d\-/]+)$",
-    "Delivery Number": r"^\s*Delivery\s*Number[:\s]+([\w-]+)$",
-    "Sale Order Number": r"^\s*Sale\s*Order\s*Number[:\s]+([\w-]+)$",
-    "Batch Number": r"^\s*Batch\s*Number[:\s]+([\w-]+)$",
-    "SSCC Qty": r"^\s*SSCC\s*Qty[:\s]+([\w-]+)$",
-    "Vessel ETD": r"^\s*Vessel\s*ETD[:\s]+([\w\-/]+)$",
-    "Destination": rf"^\s*Destination[:\s]+{LINE}$",
-    "3rd Party Storage": rf"^\s*3rd\s*Party\s*Storage[:\s]+{LINE}$",
-    "Variety": rf"^\s*Variety[:\s]+{LINE}$",
-    "Grade": r"^\s*Grade[:\s]+([\w]+)$",
-    "Size": r"^\s*Size[:\s]+([\w/]+)$",
-    "Packaging": rf"^\s*Packaging[:\s]+{LINE}$",
-    "Pallet": r"^\s*Pallet[:\s]+([\w-]+)$",
-    "Fumigation": rf"^\s*Fumigation[:\s]+{LINE}$",
-    "Container": r"^\s*Container[:\s]+([\w-]+)$",
-}
+FLAGS = re.IGNORECASE | re.MULTILINE
+
 
 def _find_line(pattern: str, text: str) -> str:
-    m = re.search(pattern, text, flags=re.MULTILINE | re.IGNORECASE)
-    return (m.group(1).strip() if m else "")
+    """Return the first capture group for the given pattern in the text."""
+    match = re.search(pattern, text, FLAGS)
+    return match.group(1).strip() if match else ""
 
-def _parse_fields(text: str) -> Dict[str, str]:
-    return {k: _find_line(pat, text) for k, pat in FIELD_PATTERNS.items()}
 
-def run(*, input_pdf: str, out: str) -> None:
+def parse_export_text(text: str) -> Dict[str, Any]:
+    """Parse raw PDF text into a dict of field -> value using shared patterns."""
+    return {
+        field: _find_line(pattern, text)
+        for field, pattern in FIELD_PATTERNS.items()
+    }
+
+
+def _extract_text_compat(path: str, debug: bool, use_ocr: bool) -> str:
+    """Call `extract_text` but stay compatible with simple monkeypatched fakes."""
+    try:
+        return extract_text(path, debug=debug, use_ocr=use_ocr)
+    except TypeError:
+        # Likely a simple fake/monkeypatch that only takes `path`.
+        return extract_text(path)
+
+
+def parse_export_pdf(
+    pdf_path: Path | str,
+    debug: bool = False,
+    use_ocr: bool = False,
+) -> pd.DataFrame:
+    """Parse a single export-order PDF into a one-row DataFrame.
+
+    The resulting DataFrame uses EXPECTED_COLUMNS for a stable column order
+    and fills any missing fields with empty strings.
     """
-    Export pipeline: parse one Export-style PDF -> one-row CSV with EXPORT_COLUMNS.
-    """
-    text = extract_text(input_pdf)
-    fields = _parse_fields(text)
+    pdf_path = Path(pdf_path)
+    text = _extract_text_compat(str(pdf_path), debug=debug, use_ocr=use_ocr)
+    fields = parse_export_text(text)
 
-    row = {col: fields.get(col, "") for col in EXPORT_COLUMNS}
-    write_csv(out, [row], EXPORT_COLUMNS)
+    row = [fields.get(column, "") for column in EXPECTED_COLUMNS]
+    return pd.DataFrame([row], columns=EXPECTED_COLUMNS)
+
+
+def run(
+    input_pdf: Path | str,
+    out: Path | str,
+    debug: bool = False,
+    use_ocr: bool = False,
+) -> None:
+    """High-level entry point: parse an export-order PDF and write a CSV."""
+    df = parse_export_pdf(input_pdf, debug=debug, use_ocr=use_ocr)
+
+    out_path = Path(out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out_path, index=False)

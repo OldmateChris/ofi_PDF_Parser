@@ -4,25 +4,31 @@ version = "0.1.0"
 description = "PDF-to-CSV parsing tool with optional OCR fallback"
 readme = "README.md"
 requires-python = ">=3.10"
+
 dependencies = [
     "pandas",
-    "pymupdf",
-    "pdfminer.six",
-    "pypdf",
+    "pymupdf",      # provides `fitz`
     "PyPDF2",
     "pytesseract",
     "pdf2image",
     "Pillow",
+]
+
+[project.optional-dependencies]
+dev = [
     "pytest",
 ]
 
-# NEW SECTION
 [tool.setuptools]
-packages = ["ParsingTool"]   # this must match the folder name exactly
+# Single top-level package called "ParsingTool"
+packages = ["ParsingTool"]
 
 [project.scripts]
+# CLI: e.g. `parsingtool export input.pdf --out out.csv`
 parsingtool = "ParsingTool.parsing.cli:main"
-parsingtool-gui = "ParsingTool.parsing.main:main"
+
+# GUI: e.g. `parsingtool-gui` to launch the Tkinter UI
+parsingtool-gui = "ParsingTool.main:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
