@@ -20,19 +20,19 @@ EXPORT_FIELD_PATTERNS: Dict[str, str] = {
     "Name": r"^\s*Name[:\s]+([^\n]+)$",
 
     # The PDF uses "Date" not always "Date Requested"
-    "Date Requested": r"Date\s*(?:Requested)?[\s:]*([\d./-]+)",
+    "Date Requested": r"D[a@]te\s*(?:R[e3]qu[e3]st[e3]d)?[\s:.-]*([\d./-]+)",
 
     # OLAM Ref No. / OLAM Ref Number
     "OLAM Ref Number": r"OLAM\s*Ref\s*(?:No\.?|Number)[\s:]*([\w-]+)",
 
     # Delivery No. / Delivery Number
-    "Delivery Number": r"Delivery\s*(?:No\.?|Number)[\s:]*([\w-]+)",
+    "Delivery Number": r"D[eIl]livery\s*(?:N[o0]\.?|N[u]mb[e3]r)?[\s:.-]*([\w-]+)",
 
     # Sale Order No. / Sale Order Number
-    "Sale Order Number": r"Sale\s*Order\s*No\.?[\s:]*([\w-]+)",
+    "Sale Order Number": r"S[a@]le\s*Ord[e3]r\s*(?:N[o0]\.?|N[u]mb[e3]r)?[\s:.-]*([\w-]+)",
 
     # Batch number / Batch No. — allow split label + value
-    "Batch Number": r"Batch\s*(?:No\.?|Number)?[\s:]*([\w\-\/]+)",
+    "Batch Number": r"B[a@]tch\s*(?:N[o0]\.?|N[u]mb[e3]r)?[\s:.-]*([\w\-\/]+)",
     
     # SSCC quantity
     "SSCC Qty": r"SSCC\s*Qty[\s:]*([\d,\.]+)",

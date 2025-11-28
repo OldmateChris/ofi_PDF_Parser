@@ -15,6 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_exp = sub.add_parser("export", help="Parse Export PDF (placeholder)")
     p_exp.add_argument("input_pdf")
     p_exp.add_argument("--out", required=True)
+    p_exp.add_argument("--ocr", action="store_true", help="Enable OCR fallback")
     return p
 
 
@@ -38,7 +39,7 @@ def main() -> None:
         return
 
     if args.command == "export":
-        run_export(input_pdf=args.input_pdf, out=args.out)
+        run_export(input_pdf=args.input_pdf, out=args.out, use_ocr=args.ocr)
         return
 
     parser.print_help()

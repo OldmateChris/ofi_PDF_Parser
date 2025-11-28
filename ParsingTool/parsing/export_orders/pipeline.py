@@ -78,9 +78,14 @@ def parse_export_pdf(
         fields["SSCC Qty"] = f"{qty_clean} PAL"
 
     # 2) 3rd Party Storage  -> Packer line
-    m = re.search(r"Packer\s*:\s*\n([^\n]+)", text, FLAGS)
+    # Capture 1 or 2 lines to handle wrapped names, but stop if we hit Consignee
+    m = re.search(r"Packer\s*:\s*\n([^\n]+(?:\n[^\n]+)?)", text, FLAGS)
     if m:
-        fields["3rd Party Storage"] = m.group(1).strip()
+        raw = m.group(1)
+        # If we accidentally captured the start of "Consignee :", cut it off
+        if "Consignee" in raw:
+            raw = raw.split("Consignee")[0]
+        fields["3rd Party Storage"] = raw.replace("\n", " ").strip()
 
     # 3) Variety / Grade / Size / Packaging from description line
     #    We look for a line that starts with "Almonds" and then decide
@@ -98,7 +103,28 @@ def parse_export_pdf(
         "h&s",
     )
 
-    desc_match = re.search(r"(Almonds[^\n]+)", text, FLAGS)
+    # -----------------------------------------------------------
+    # Product Description Search (with fallbacks for OCR)
+    # -----------------------------------------------------------
+    
+    desc_match = None
+    
+    # 1. Primary: Standard "Almonds ..."
+    if not desc_match:
+        desc_match = re.search(r"(Almonds[^\n]+)", text, FLAGS)
+        
+    # 2. Fallback (Typos): "AImonds", "Kern", "ALM" (word boundary)
+    if not desc_match:
+        desc_match = re.search(r"((?:A[lI]monds|Kern|\bALM\b)[^\n]+)", text, FLAGS)
+        
+    # 3. Fallback (Context): Look for size pattern like "25/27"
+    if not desc_match:
+        desc_match = re.search(r"([^\n]*\d{2}\s*/\s*\d{2}[^\n]*)", text, FLAGS)
+
+    # 4. Fallback (Keywords): Stockfeed, Mfr, etc.
+    if not desc_match:
+        desc_match = re.search(r"((?:Stockfeed|Mfr|Manufacturing|Inshell|Hulls)[^\n]+)", text, FLAGS)
+
     if desc_match:
         desc = desc_match.group(1).strip()
         desc_lower = desc.lower()
@@ -107,6 +133,9 @@ def parse_export_pdf(
         has_size = re.search(r"\d{2}\s*/\s*\d{2}", desc)
 
         is_reject = (not has_size) and any(tok in desc_lower for tok in REJECT_TOKENS)
+        # Also treat the new fallback keywords as rejects if they don't have a size
+        if not is_reject and not has_size:
+             is_reject = any(k in desc_lower for k in ["stockfeed", "mfr", "manufacturing", "inshell", "hulls"])
 
         if is_reject:
             # REJECTS PRODUCT
@@ -119,13 +148,26 @@ def parse_export_pdf(
                 variety = "Almonds Kern Non Var"
                 rest = desc
 
-            # Remove a trailing "KG" from grade part if present
+            # Fix Grade Bleeding: Split Grade from Packaging if units are found
+            # e.g. "Std Gr 850KG bag" -> Grade="Std Gr", Packaging="850KG bag"
+            packaging = "Bulk Bags" # default
+            
+            # Look for a unit like KG, lb, bag, T
+            unit_match = re.search(r"\b(\d+(?:\.\d+)?\s*(?:KG|lb|T)|bag)\b", rest, re.IGNORECASE)
+            if unit_match:
+                split_idx = unit_match.start()
+                # The part starting from the unit is the packaging
+                packaging = rest[split_idx:].strip()
+                # The part before is the grade
+                rest = rest[:split_idx].strip()
+
+            # Remove a trailing "KG" from grade part if it was left over (legacy check)
             rest = re.sub(r"\bKG\b", "", rest, flags=re.IGNORECASE).strip()
 
-            fields["Variety"] = variety              # e.g. "Almonds Kern Non Var"
-            fields["Grade"]   = rest                 # e.g. "H&S Satake" / "H&S Beltuza"
-            fields["Size"]    = "N/A"                # rejects have no size
-            fields["Packaging"] = "Bulk Bags"        # your current rule
+            fields["Variety"] = variety.title()      # Normalize case
+            fields["Grade"]   = rest
+            fields["Size"]    = "N/A"
+            fields["Packaging"] = packaging
         else:
             # NORMAL PRODUCT (with size)
             # Example: "Almonds Kern Carm Supr 25/27 50lb ctn"
@@ -136,7 +178,7 @@ def parse_export_pdf(
             )
             if m:
                 variety, grade, size, packaging = [s.strip() for s in m.groups()]
-                fields["Variety"]   = variety
+                fields["Variety"]   = variety.title() # Normalize case
                 fields["Grade"]     = grade
                 fields["Size"]      = size
                 fields["Packaging"] = packaging
@@ -216,3 +258,8 @@ def parse_export_pdf(
     df = pd.DataFrame(rows, columns=EXPECTED_COLUMNS)
     df = df.drop_duplicates().reset_index(drop=True)
     return df
+
+
+def run(*, input_pdf: str, out: str, use_ocr: bool = False) -> None:
+    df = parse_export_pdf(input_pdf, use_ocr=use_ocr)
+    df.to_csv(out, index=False)
