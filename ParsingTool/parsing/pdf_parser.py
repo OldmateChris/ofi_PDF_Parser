@@ -33,26 +33,6 @@ def _parse_fields(text: str) -> Dict[str, Any]:
     return {key: _find_line(pattern, text) for key, pattern in FIELD_PATTERNS.items()}
 
 
-def _extract_text_compat(path: str, debug: bool, use_ocr: bool) -> str:
-    """Call `extract_text` but stay compatible with simple monkeypatched fakes.
-
-    In tests or older code, `extract_text` may be replaced with a function that
-    accepts only a single positional argument (the path) and no keyword
-    arguments. In that case, calling it with `debug=` would raise a TypeError.
-
-    This helper tries the modern signature first, and if that fails due to a
-    TypeError, falls back to calling the extractor with just the path.
-    """
-    try:
-        return extract_text(path, debug=debug, use_ocr=use_ocr)
-    except TypeError:
-        # Likely a simple fake/monkeypatch that only takes `path`.
-        return extract_text(path)
-
-
-# --- Public API ------------------------------------------------------------
-
-
 def parse_pdf(
     pdf_path: Path | str,
     debug: bool = False,
@@ -72,9 +52,8 @@ def parse_pdf(
     """
     pdf_path = Path(pdf_path)
 
-    # Use a small compatibility wrapper so tests that monkeypatch
-    # `extract_text` with a simple function still succeed.
-    text = _extract_text_compat(str(pdf_path), debug=debug, use_ocr=use_ocr)
+    # Call extract_text directly
+    text = extract_text(str(pdf_path), debug=debug, use_ocr=use_ocr)
 
     # Turn the raw text into a dict of field -> value.
     fields = _parse_fields(text)

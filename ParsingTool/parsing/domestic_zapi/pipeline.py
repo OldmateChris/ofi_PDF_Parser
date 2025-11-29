@@ -237,15 +237,19 @@ def _parse_product_fields(product_lines: List[str]) -> dict:
 # Public entrypoint
 # -----------------------------
 
-def run(*, input_pdf: str, out_batches: str, out_sscc: str) -> None:
+def run(*, input_pdf: str, out_batches: str, out_sscc: str, use_ocr: bool = False, debug: bool = False) -> None:
     # 1) Extract text
-    text = extract_text(input_pdf)
+    text = extract_text(input_pdf, use_ocr=use_ocr, debug=debug)
 
     # 2) Headers
     H = _parse_headers(text)
+    if debug and not H.get("Delivery Number"):
+        print(f"[WARN] {input_pdf}: Could not find 'Delivery Number' using regex.")
 
     # 3) Batches & SSCC blocks
     blocks = _parse_batches_and_sscc(text)
+    if debug and not blocks:
+        print(f"[WARN] {input_pdf}: No batches found.")
 
     # 4) Build rows
     batch_rows: List[Dict[str, str]] = []

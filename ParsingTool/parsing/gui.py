@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox, scrolledtext
 from pathlib import Path
 import pandas as pd  # currently unused, but OK to keep
 import shutil
+import threading
 
 from .export_orders.pipeline import parse_export_pdf
 from .domestic_zapi import pipeline as domestic_pipeline
@@ -158,12 +159,89 @@ def run_gui() -> None:
     # -------------------------------------------------------------------
 
     def log(msg: str) -> None:
-        log_box.insert(tk.END, msg + "\n")
-        log_box.see(tk.END)
+        def _insert():
+            log_box.insert(tk.END, msg + "\n")
+            log_box.see(tk.END)
+        root.after(0, _insert)
 
     # -------------------------------------------------------------------
-    # MAIN PROCESSING LOGIC
+    # STATUS BAR UPDATER
     # -------------------------------------------------------------------
+    
+    def is_installed(cmd: str) -> bool:
+        return shutil.which(cmd) is not None
+
+    def update_status_indicators():
+        tesseract_ok = is_installed("tesseract")
+        tess_colour = FG_OK if tesseract_ok else FG_ERROR
+        tess_label.config(fg=tess_colour)
+
+        poppler_ok = is_installed("pdftoppm") or is_installed("pdfinfo")
+        poppler_colour = FG_OK if poppler_ok else FG_ERROR
+        poppler_label.config(fg=poppler_colour)
+
+    # -------------------------------------------------------------------
+    # MAIN PROCESSING LOGIC (THREADED)
+    # -------------------------------------------------------------------
+
+    def run_processing_thread(pdfs, outdir, mode, debug, use_ocr, run_qc):
+        try:
+            # Runtime check for dependencies
+            root.after(0, update_status_indicators)
+            
+            qc_results: list = []
+            
+            for p in pdfs:
+                try:
+                    if mode == "domestic":
+                        # Domestic pipeline: writes 2 CSVs (batches + SSCC)
+                        base = p.stem
+                        batches_out = outdir / f"{base}_batches.csv"
+                        sscc_out = outdir / f"{base}_sscc.csv"
+
+                        domestic_pipeline.run(
+                            input_pdf=str(p),
+                            out_batches=str(batches_out),
+                            out_sscc=str(sscc_out),
+                            use_ocr=use_ocr,
+                            debug=debug
+                        )
+                        
+                        log(f"[saved] {batches_out}")
+                        log(f"[saved] {sscc_out}")
+
+                    else:
+                        # Export pipeline: one-row CSV + QC
+                        df = parse_export_pdf(
+                            p,
+                            debug=debug,
+                            use_ocr=use_ocr,
+                        )
+                        base = (df.iloc[0].get("Delivery Number") or "").strip() or p.stem
+                        out = outdir / f"parsed_{base}.csv"
+                        df.to_csv(out, index=False, encoding="utf-8-sig")
+                        log(f"[saved] {out}")
+                        qc_results.append(validate(df, p.name))
+
+                except Exception as e:  # GUI error path
+                    log(f"[error] {p}: {e}")
+
+            # QC/report only makes sense for export mode
+            if mode == "export" and run_qc:
+                report_path = outdir / "qc_report.md"
+                write_report(qc_results, report_path)
+                log(f"[qc] wrote {report_path}")
+            elif mode == "domestic" and run_qc:
+                log("[qc] Note: QC report is only implemented for export mode; skipping.")
+                
+            log("Done.")
+
+        except Exception as e:
+            log(f"Critical Error: {e}")
+        finally:
+            # Re-enable button
+            root.after(0, lambda: process_btn.config(state=tk.NORMAL, text="Process"))
+
 
     def process() -> None:
         outdir = Path(output_entry.get().strip() or ".")
@@ -180,50 +258,23 @@ def run_gui() -> None:
             return
 
         outdir.mkdir(parents=True, exist_ok=True)
-        qc_results: list = []
-
+        
+        # Disable button
+        process_btn.config(state=tk.DISABLED, text="Processing...")
+        
+        # Capture values from UI thread
         mode = mode_var.get() or "export"
+        debug = debug_var.get()
+        use_ocr = ocr_var.get()
+        run_qc = qc_var.get()
 
-        for p in pdfs:
-            try:
-                if mode == "domestic":
-                    # Domestic pipeline: writes 2 CSVs (batches + SSCC)
-                    base = p.stem
-                    batches_out = outdir / f"{base}_batches.csv"
-                    sscc_out = outdir / f"{base}_sscc.csv"
-
-                    domestic_pipeline.run(
-                        input_pdf=str(p),
-                        out_batches=str(batches_out),
-                        out_sscc=str(sscc_out),
-                    )
-                    
-                    log(f"[saved] {batches_out}")
-                    log(f"[saved] {sscc_out}")
-
-                else:
-                    # Export pipeline: one-row CSV + QC
-                    df = parse_export_pdf(
-                        p,
-                        debug=debug_var.get(),
-                        use_ocr=ocr_var.get(),
-                    )
-                    base = (df.iloc[0].get("Delivery Number") or "").strip() or p.stem
-                    out = outdir / f"parsed_{base}.csv"
-                    df.to_csv(out, index=False, encoding="utf-8-sig")
-                    log(f"[saved] {out}")
-                    qc_results.append(validate(df, p.name))
-
-            except Exception as e:  # GUI error path
-                log(f"[error] {p}: {e}")
-
-        # QC/report only makes sense for export mode
-        if mode == "export" and qc_var.get():
-            report_path = outdir / "qc_report.md"
-            write_report(qc_results, report_path)
-            log(f"[qc] wrote {report_path}")
-        elif mode == "domestic" and qc_var.get():
-            log("[qc] Note: QC report is only implemented for export mode; skipping.")
+        # Start thread
+        t = threading.Thread(
+            target=run_processing_thread,
+            args=(pdfs, outdir, mode, debug, use_ocr, run_qc),
+            daemon=True
+        )
+        t.start()
 
     # -------------------------------------------------------------------
     # LAYOUT: LABELS, ENTRIES, BROWSE BUTTONS
@@ -343,7 +394,7 @@ def run_gui() -> None:
     # PROCESS BUTTON
     # -------------------------------------------------------------------
 
-    tk.Button(
+    process_btn = tk.Button(
         root,
         text="Process",
         command=process,
@@ -352,43 +403,40 @@ def run_gui() -> None:
         fg=BUTTON_FG,
         activebackground=BUTTON_ACTIVE_BG,
         activeforeground=BUTTON_ACTIVE_FG,
-    ).grid(row=5, column=1, pady=10)
+    )
+    process_btn.grid(row=5, column=1, pady=10)
 
     # -------------------------------------------------------------------
     # TESSERACT / POPPLER STATUS BAR
     # -------------------------------------------------------------------
-
-    def is_installed(cmd: str) -> bool:
-        return shutil.which(cmd) is not None
 
     status_bar = tk.Frame(root, bg=BG_STATUS)
     status_bar.grid(row=7, column=0, columnspan=3, sticky="we")
     status_bar.grid_columnconfigure(0, weight=1)
     status_bar.grid_columnconfigure(1, weight=1)
 
-    tesseract_ok = is_installed("tesseract")
-    tess_colour = FG_OK if tesseract_ok else FG_ERROR
-
-    tk.Label(
+    tess_label = tk.Label(
         status_bar,
         text="TESSERACT",
-        fg=tess_colour,
+        fg=FG_MUTED, # Initial state
         bg=BG_STATUS,
         font=FONT_STATUS,
         anchor="w",
-    ).grid(row=0, column=0, sticky="w", padx=10, pady=3)
+    )
+    tess_label.grid(row=0, column=0, sticky="w", padx=10, pady=3)
 
-    poppler_ok = is_installed("pdftoppm") or is_installed("pdfinfo")
-    poppler_colour = FG_OK if poppler_ok else FG_ERROR
-
-    tk.Label(
+    poppler_label = tk.Label(
         status_bar,
         text="POPPLER",
-        fg=poppler_colour,
+        fg=FG_MUTED, # Initial state
         bg=BG_STATUS,
         font=FONT_STATUS,
         anchor="e",
-    ).grid(row=0, column=1, sticky="e", padx=10, pady=3)
+    )
+    poppler_label.grid(row=0, column=1, sticky="e", padx=10, pady=3)
+    
+    # Initial check
+    update_status_indicators()
 
     root.mainloop()
 

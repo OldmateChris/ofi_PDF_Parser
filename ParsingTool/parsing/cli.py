@@ -11,11 +11,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_dom.add_argument("input_pdf")
     p_dom.add_argument("--out-batches", required=True)
     p_dom.add_argument("--out-sscc", required=True)
+    p_dom.add_argument("--ocr", action="store_true", help="Enable OCR fallback")
+    p_dom.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     p_exp = sub.add_parser("export", help="Parse Export PDF (placeholder)")
     p_exp.add_argument("input_pdf")
     p_exp.add_argument("--out", required=True)
     p_exp.add_argument("--ocr", action="store_true", help="Enable OCR fallback")
+    p_exp.add_argument("--debug", action="store_true", help="Enable debug logging")
+    p_exp.add_argument("--qc", action="store_true", help="Generate QC report")
     return p
 
 
@@ -35,11 +39,23 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "domestic":
-        run_domestic(input_pdf=args.input_pdf, out_batches=args.out_batches, out_sscc=args.out_sscc)
+        run_domestic(
+            input_pdf=args.input_pdf,
+            out_batches=args.out_batches,
+            out_sscc=args.out_sscc,
+            use_ocr=args.ocr,
+            debug=args.debug,
+        )
         return
 
     if args.command == "export":
-        run_export(input_pdf=args.input_pdf, out=args.out, use_ocr=args.ocr)
+        run_export(
+            input_pdf=args.input_pdf,
+            out=args.out,
+            use_ocr=args.ocr,
+            debug=args.debug,
+            generate_qc=args.qc,
+        )
         return
 
     parser.print_help()

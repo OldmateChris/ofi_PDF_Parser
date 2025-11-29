@@ -1,5 +1,5 @@
 [project]
-name = "parsingtool"
+name = "parsingtool"  # distribution name on pip
 version = "0.1.0"
 description = "PDF-to-CSV parsing tool with optional OCR fallback"
 readme = "README.md"
@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 
 dependencies = [
     "pandas",
-    "pymupdf",      # provides `fitz`
+    "pymupdf",      # provides 'fitz'
     "PyPDF2",
     "pytesseract",
     "pdf2image",
@@ -32,7 +32,7 @@ include = ["ParsingTool*"]
 parsingtool = "ParsingTool.parsing.cli:main"
 
 # GUI: e.g. `parsingtool-gui` to launch the Tkinter UI
-parsingtool-gui = "ParsingTool.main:main"
+parsingtool-gui = "ParsingTool.parsing.main:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

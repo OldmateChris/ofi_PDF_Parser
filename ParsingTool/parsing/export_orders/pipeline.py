@@ -1,265 +1,248 @@
 """Export-orders pipeline using shared EXPORT_FIELD_PATTERNS.
 
-This module parses an export-order PDF into a one-row CSV (or multi-row when
-there are multiple batch numbers). It relies on the shared EXPORT_FIELD_PATTERNS
-so that the regex definitions are centralised and consistent with the simple
-`parse_pdf` helper.
+This version includes:
+1. Token Plucking for robust Product parsing.
+2. Enhanced 3rd Party Storage parsing with stricter stop-words and case-insensitive fallback.
+3. Strategy C for bulk/reject loads.
 """
 
 from __future__ import annotations
-
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 import re
-
 import pandas as pd
-
 from ..shared.pdf_utils import extract_text
 from ..shared.export_patterns import EXPORT_FIELD_PATTERNS
 from ..qc import EXPECTED_COLUMNS
 
-# Backwards-compat alias: some existing code may still import FIELD_PATTERNS
-FIELD_PATTERNS = EXPORT_FIELD_PATTERNS
+# --- Configuration ---
 
+FIELD_PATTERNS = EXPORT_FIELD_PATTERNS
 FLAGS = re.IGNORECASE | re.MULTILINE
 
+KNOWN_GRADES = [
+    "SSR", "Supr", "XNo1", "XNo.1", "X No 1", "X No.1", 
+    "Premium", "Supreme", "Select", "Std", "Standard",
+    "Mfr", "Manufacturing", "H&S", "Rejects", "Mixed",
+    "Carm", "Nonpareil" 
+]
 
 def _find_line(pattern: str, text: str) -> str:
-    """Return the first capture group for the given pattern in the text."""
     match = re.search(pattern, text, FLAGS)
-    return match.group(1).strip() if match else ""
+    if match:
+        val = match.group(1).strip()
+        if val.lower() in ["sale", "date", "delivery", "booking", "quantity", "description"]:
+            return ""
+        return val
+    return ""
 
+def parse_product_line(line: str) -> Dict[str, str]:
+    """Smarter parsing: Pluck out known tokens, leave the rest as Variety."""
+    row = {"Variety": "", "Grade": "", "Size": "N/A", "Packaging": ""}
+    
+    # 1. Remove leading material codes immediately
+    remainder = re.sub(r"^\s*\d+[\s/]+", "", line.strip())
 
-def parse_export_text(text: str) -> Dict[str, Any]:
-    """Parse raw PDF text into a dict of field -> value using shared patterns."""
-    return {
-        field: _find_line(pattern, text)
-        for field, pattern in FIELD_PATTERNS.items()
-    }
+    # 2. PLUCK SIZE
+    size_match = re.search(r"\b(\d{2}\s*/\s*\d{2})\b", remainder)
+    if size_match:
+        row["Size"] = size_match.group(1).replace(" ", "")
+        remainder = remainder.replace(size_match.group(0), " ")
 
+    # 3. PLUCK PACKAGING
+    pack_match = re.search(r"\b(\d+(?:[.,]\d+)?)\s*(lb|kg|g|oz|T|b)\b\s*([a-zA-Z]*)", remainder, re.IGNORECASE)
+    if pack_match:
+        full_pack = pack_match.group(0).strip()
+        if "50b" in full_pack.lower() and "ctn" in full_pack.lower():
+            full_pack = full_pack.replace("50b", "50lb")
+        row["Packaging"] = full_pack
+        remainder = remainder.replace(pack_match.group(0), " ")
+    elif "bulk bags" in remainder.lower():
+        row["Packaging"] = "Bulk Bags"
+        remainder = re.sub(r"\bBulk Bags\b", " ", remainder, flags=re.IGNORECASE)
 
-def _extract_text_compat(path: str, debug: bool, use_ocr: bool) -> str:
-    """Call `extract_text` but stay compatible with simple monkeypatched fakes."""
-    try:
-        return extract_text(path, debug=debug, use_ocr=use_ocr)
-    except TypeError:
-        # Likely a simple fake/monkeypatch that only takes `path`.
-        return extract_text(path)
+    # 4. PLUCK GRADE
+    for grade in sorted(KNOWN_GRADES, key=len, reverse=True):
+        pattern = r"\b" + re.escape(grade) + r"\b"
+        if re.search(pattern, remainder, re.IGNORECASE):
+            row["Grade"] = grade
+            remainder = re.sub(pattern, " ", remainder, flags=re.IGNORECASE)
+            break 
 
+    # 5. CLEANUP VARIETY
+    remainder = re.sub(r"\b\d{2,}\.\d+\.\d+\b", " ", remainder)
+    remainder = re.sub(r"\b\d{3,}\b", " ", remainder) 
+    remainder = re.sub(r"\bX\b", " ", remainder, flags=re.IGNORECASE)
+
+    cleaned_var = re.sub(r"\s+", " ", remainder).strip(" ,.-")
+    row["Variety"] = cleaned_var.title() if cleaned_var else ""
+    
+    return row
 
 def parse_export_pdf(
     pdf_path: Path | str,
     debug: bool = False,
     use_ocr: bool = False,
 ) -> pd.DataFrame:
-    """Parse a single export-order PDF into a DataFrame.
-
-    - Container-level / header fields come from shared regex patterns
-      plus a few overrides.
-    - One row is produced per Batch Number found in the text.
-    """
-
     pdf_path = Path(pdf_path)
-    text = _extract_text_compat(str(pdf_path), debug=debug, use_ocr=use_ocr)
+    try:
+        text = extract_text(str(pdf_path), debug=debug, use_ocr=use_ocr)
+    except TypeError:
+        text = extract_text(str(pdf_path))
 
-    # First pass: use the shared regex patterns
-    fields = parse_export_text(text)
+    fields = {}
+    
+    # 1. Standard Fields
+    for field, pattern in FIELD_PATTERNS.items():
+        val = _find_line(pattern, text)
+        if field in ["Delivery Number", "Sale Order Number", "OLAM Ref Number", "Batch Number"]:
+            if val and not any(c.isdigit() for c in val):
+                val = ""
+        fields[field] = val
+    
+    if debug and not fields.get("Delivery Number"):
+        print(f"[WARN] {pdf_path.name}: Could not find 'Delivery Number' using regex.")
 
-    # -----------------------------------------------------------
-    # Overwrite the tricky fields based on this packing layout
-    # -----------------------------------------------------------
-
-    # 1) SSCC Qty  -> line like "22.000 PAL"
-    # Anchor to the start of a line so we don't swallow batch digits above.
-    m = re.search(r"^\s*([\d., ]+)\s+PAL\b", text, FLAGS)
+    # 2. OVERRIDES & FIXES
+    
+    # SSCC Qty
+    m = re.search(r"\b(\d+(?:[.,]\d+)?)\s+PAL\b", text, FLAGS)
     if m:
-        qty_raw = m.group(1)
-        qty_clean = re.sub(r"\s+", "", qty_raw).strip()
-        fields["SSCC Qty"] = f"{qty_clean} PAL"
+        fields["SSCC Qty"] = f"{m.group(1).strip()} PAL"
 
-    # 2) 3rd Party Storage  -> Packer line
-    # Capture 1 or 2 lines to handle wrapped names, but stop if we hit Consignee
-    m = re.search(r"Packer\s*:\s*\n([^\n]+(?:\n[^\n]+)?)", text, FLAGS)
+    # --- 3rd Party Storage (Packer) Fix ---
+    packer_val = ""
+    # Regex: Look for Packer, capture line(s) until we hit a stop word or double newline
+    m = re.search(r"Packer\s*[:\s]*\s*([^\n]+(?:(?:\n(?!Consignee|Notify|Delivery|Sale)[^\n]+))?)", text, FLAGS)
     if m:
         raw = m.group(1)
-        # If we accidentally captured the start of "Consignee :", cut it off
-        if "Consignee" in raw:
-            raw = raw.split("Consignee")[0]
-        fields["3rd Party Storage"] = raw.replace("\n", " ").strip()
-
-    # 3) Variety / Grade / Size / Packaging from description line
-    #    We look for a line that starts with "Almonds" and then decide
-    #    whether it's a normal product (has size 25/27 etc.) or a rejects
-    #    product (no size; contains Non Var / Mfg / Splits / etc.).
-
-    REJECT_TOKENS = (
-        "non var",
-        "mfg",
-        "splits",
-        "brokens",
-        "splits&brokens",
-        "beltuza",
-        "satake",
-        "h&s",
-    )
-
-    # -----------------------------------------------------------
-    # Product Description Search (with fallbacks for OCR)
-    # -----------------------------------------------------------
-    
-    desc_match = None
-    
-    # 1. Primary: Standard "Almonds ..."
-    if not desc_match:
-        desc_match = re.search(r"(Almonds[^\n]+)", text, FLAGS)
+        # Aggressive Stop List: Now includes OLAM, Ref, Booking to prevent capturing headers
+        stops = r"(?i)\b(?:Consignee|Notify|Delivery|Sale|Date|OLAM|Ref|Booking|Container)\b"
+        raw = re.split(stops, raw)[0]
         
-    # 2. Fallback (Typos): "AImonds", "Kern", "ALM" (word boundary)
-    if not desc_match:
-        desc_match = re.search(r"((?:A[lI]monds|Kern|\bALM\b)[^\n]+)", text, FLAGS)
+        cleaned = raw.replace("\n", " ").strip()
         
-    # 3. Fallback (Context): Look for size pattern like "25/27"
-    if not desc_match:
-        desc_match = re.search(r"([^\n]*\d{2}\s*/\s*\d{2}[^\n]*)", text, FLAGS)
+        # Validation: Must have letters and NOT be just digits/symbols
+        if re.search(r"[A-Za-z]{2,}", cleaned) and not re.match(r"^[\d\s\W]+$", cleaned):
+            packer_val = cleaned
 
-    # 4. Fallback (Keywords): Stockfeed, Mfr, etc.
-    if not desc_match:
-        desc_match = re.search(r"((?:Stockfeed|Mfr|Manufacturing|Inshell|Hulls)[^\n]+)", text, FLAGS)
+    # Fallback Heuristic (Case-Insensitive)
+    if not packer_val:
+        text_lower = text.lower()
+        if "seaway" in text_lower: packer_val = "Seaway Intermodal Pty Ltd"
+        elif "rjn" in text_lower: packer_val = "RJN Storage and Logistics Pty Ltd"
+        elif "west melbourne" in text_lower: packer_val = "West Melbourne Processing Plant-OOA"
+    
+    fields["3rd Party Storage"] = packer_val
 
-    if desc_match:
-        desc = desc_match.group(1).strip()
-        desc_lower = desc.lower()
-
-        # Does this line contain a size like 25/27, 30 / 32, etc.?
-        has_size = re.search(r"\d{2}\s*/\s*\d{2}", desc)
-
-        is_reject = (not has_size) and any(tok in desc_lower for tok in REJECT_TOKENS)
-        # Also treat the new fallback keywords as rejects if they don't have a size
-        if not is_reject and not has_size:
-             is_reject = any(k in desc_lower for k in ["stockfeed", "mfr", "manufacturing", "inshell", "hulls"])
-
-        if is_reject:
-            # REJECTS PRODUCT
-            # Variety: up to "Non Var" if present, otherwise use a default.
-            var_match = re.search(r"^(Almonds\s+Kern\s+Non\s+Var)", desc, FLAGS)
-            if var_match:
-                variety = var_match.group(1).strip()
-                rest = desc[var_match.end():].strip()
-            else:
-                variety = "Almonds Kern Non Var"
-                rest = desc
-
-            # Fix Grade Bleeding: Split Grade from Packaging if units are found
-            # e.g. "Std Gr 850KG bag" -> Grade="Std Gr", Packaging="850KG bag"
-            packaging = "Bulk Bags" # default
-            
-            # Look for a unit like KG, lb, bag, T
-            unit_match = re.search(r"\b(\d+(?:\.\d+)?\s*(?:KG|lb|T)|bag)\b", rest, re.IGNORECASE)
-            if unit_match:
-                split_idx = unit_match.start()
-                # The part starting from the unit is the packaging
-                packaging = rest[split_idx:].strip()
-                # The part before is the grade
-                rest = rest[:split_idx].strip()
-
-            # Remove a trailing "KG" from grade part if it was left over (legacy check)
-            rest = re.sub(r"\bKG\b", "", rest, flags=re.IGNORECASE).strip()
-
-            fields["Variety"] = variety.title()      # Normalize case
-            fields["Grade"]   = rest
-            fields["Size"]    = "N/A"
-            fields["Packaging"] = packaging
-        else:
-            # NORMAL PRODUCT (with size)
-            # Example: "Almonds Kern Carm Supr 25/27 50lb ctn"
-            m = re.search(
-                r"(Almonds\s+Kern\s+\w+)\s+(\w+)\s+(\d{2}\s*/\s*\d{2})\s+(\d+\s*lb\s+\w+)",
-                desc,
-                FLAGS,
-            )
-            if m:
-                variety, grade, size, packaging = [s.strip() for s in m.groups()]
-                fields["Variety"]   = variety.title() # Normalize case
-                fields["Grade"]     = grade
-                fields["Size"]      = size
-                fields["Packaging"] = packaging
-
-    # 4) Pallet  -> "PLASTIC export pallets", "fibre export pallets", etc.
+    # Pallet
     m = re.search(r"loaded on\s+([A-Za-z ]+pallets)", text, FLAGS)
-    if m:
-        fields["Pallet"] = m.group(1).strip()
+    if m: fields["Pallet"] = m.group(1).strip()
 
-    # 5) Fumigation -> "2 days Fumigation with Profume"
-    fum_value: str | None = None
-
-    # First try the explicit "<n> days Fumigation ..." pattern.
+    # Fumigation
     m = re.search(r"(\d+\s+days\s+Fumigation[^\n]*)", text, FLAGS)
-    if m:
-        fum_value = m.group(1).strip()
+    if m: fields["Fumigation"] = m.group(1).strip()
     else:
-        # Fallback: use the last line that contains the word "Fumigation".
         matches = re.findall(r"[^\n]*Fumigation[^\n]*", text, FLAGS)
-        if matches:
-            fum_value = matches[-1].strip()
+        if matches: fields["Fumigation"] = matches[-1].strip()
 
-    if fum_value:
-        fields["Fumigation"] = fum_value
+    # 3. PRODUCT DESCRIPTION
+    candidate_line = ""
+    
+    # Strategy A: Explicit Product
+    match = re.search(r"^.*(?:Almonds|Kern|Alm\b|Inshell).*$", text, FLAGS)
+    if match: candidate_line = match.group(0)
 
-    # -----------------------------------------------------------
-    # Build rows: one per Batch Number if we can find them
-    # -----------------------------------------------------------
+    # Strategy B: Size Pattern
+    if not candidate_line:
+        match = re.search(r"^.*\d{2}\s*/\s*\d{2}.*$", text, FLAGS)
+        if match: candidate_line = match.group(0)
 
-    # Per-line bag counts for rejects, e.g. "14 BAGS", "3 BAGS".
-    bag_counts_raw = re.findall(r"(\d[\d\.,]*)\s+BAGS\b", text, FLAGS)
-    bag_counts = [re.sub(r"\s+", "", b).strip() for b in bag_counts_raw]
-    bag_idx = 0
+    # Strategy C: Rejects/Bulk Hunter
+    if not candidate_line:
+        match = re.search(r"^.*(?:H&S|Mfg|Bulk Bags|Splits).*$", text, FLAGS)
+        if match: candidate_line = match.group(0)
 
-    # Per-line pallet counts for normal product, e.g. "22.000 PAL"
-    pal_counts_raw = re.findall(r"([\d., ]+)\s+PAL\b", text, FLAGS)
-    pal_counts = [re.sub(r"\s+", "", p).strip() for p in pal_counts_raw]
-    pal_idx = 0
+    # Validation: Kill line if it looks like just numbers
+    if candidate_line:
+        clean_check = re.sub(r"^\s*\d+[\s/]+", "", candidate_line)
+        if not re.search(r"[A-Za-z]{3,}", clean_check):
+            candidate_line = ""
 
-    # Per-line reject grades, e.g. "H&S Satake", "H&S Beltuza"
-    reject_grades = re.findall(r"(H&S\s+[A-Za-z]+)", text, FLAGS)
-    grade_idx = 0
+    # Parse what we found
+    product_info = {"Variety": "", "Grade": "", "Size": "", "Packaging": ""}
+    if candidate_line:
+        product_info = parse_product_line(candidate_line)
+        fields.update(product_info)
+    
+    # Final Scrub: If Variety is still garbage, wipe it.
+    if re.match(r"^[\d\s\.,/]+[A-Za-z]{0,2}$", fields.get("Variety", "")):
+        fields["Variety"] = ""
 
-    # Find all batch numbers like "Batch : F012322001".
+    # 4. BATCH ROWS
+    bag_counts = re.findall(r"(\d[\d\.,]*)\s+BAGS\b", text, FLAGS)
+    pal_counts = re.findall(r"\b(\d+(?:[.,]\d+)?)\s+PAL\b", text, FLAGS)
     batch_numbers = re.findall(r"Batch\s*:\s*([A-Z0-9]+)", text, FLAGS)
+    reject_grades = re.findall(r"(H&S\s+[A-Za-z]+)", text, FLAGS)
 
-    rows: list[list[str]] = []
+    rows = []
+    bag_idx, pal_idx, grade_idx = 0, 0, 0
 
     if batch_numbers:
-        # dict.fromkeys(...) keeps order but removes exact duplicates.
-        for batch in dict.fromkeys(batch_numbers):
-            row_fields = dict(fields)
-            row_fields["Batch Number"] = batch
+        seen = set()
+        unique_batches = [x for x in batch_numbers if not (x in seen or seen.add(x))]
 
-            if row_fields.get("Packaging") == "Bulk Bags":
-                # REJECTS ROW: use BAGS and per-line H&S <something> grade
+        # Alignment Check
+        if len(bag_counts) > 0 and len(bag_counts) != len(unique_batches):
+            print(f"Warning: Found {len(bag_counts)} bag counts but {len(unique_batches)} unique batches. Data may be misaligned.")
+
+        for batch in unique_batches:
+            row = dict(fields)
+            row["Batch Number"] = batch
+            is_bulk = "bag" in str(row.get("Packaging", "")).lower() or not row.get("Size") or row.get("Size") == "N/A"
+            
+            if is_bulk:
                 if bag_idx < len(bag_counts):
-                    row_fields["SSCC Qty"] = f"{bag_counts[bag_idx]} BAGS"
+                    row["SSCC Qty"] = f"{bag_counts[bag_idx]} BAGS"
                     bag_idx += 1
-
                 if grade_idx < len(reject_grades):
-                    row_fields["Grade"] = reject_grades[grade_idx]
+                    row["Grade"] = reject_grades[grade_idx]
                     grade_idx += 1
             else:
-                # NORMAL ROW: use per-line PAL quantity if available
                 if pal_idx < len(pal_counts):
-                    row_fields["SSCC Qty"] = f"{pal_counts[pal_idx]} PAL"
+                    row["SSCC Qty"] = f"{pal_counts[pal_idx]} PAL"
                     pal_idx += 1
 
-            row = [row_fields.get(column, "") for column in EXPECTED_COLUMNS]
-            rows.append(row)
+            rows.append([row.get(c, "") for c in EXPECTED_COLUMNS])
     else:
-        # Fallback: just one row like before.
-        row = [fields.get(column, "") for column in EXPECTED_COLUMNS]
-        rows.append(row)
+        if debug:
+            print(f"[WARN] {pdf_path.name}: No batches found.")
+        rows.append([fields.get(c, "") for c in EXPECTED_COLUMNS])
 
     df = pd.DataFrame(rows, columns=EXPECTED_COLUMNS)
-    df = df.drop_duplicates().reset_index(drop=True)
-    return df
+    return df.drop_duplicates().reset_index(drop=True)
 
-
-def run(*, input_pdf: str, out: str, use_ocr: bool = False) -> None:
-    df = parse_export_pdf(input_pdf, use_ocr=use_ocr)
+def run(
+    *,
+    input_pdf: str,
+    out: str,
+    use_ocr: bool = False,
+    debug: bool = False,
+    generate_qc: bool = False,
+) -> None:
+    df = parse_export_pdf(input_pdf, use_ocr=use_ocr, debug=debug)
     df.to_csv(out, index=False)
+
+    if generate_qc:
+        from ..qc import validate, write_report
+        
+        # Run validation
+        results = [validate(df, Path(input_pdf).name)]
+        
+        # Determine report path (same dir as output csv)
+        out_path = Path(out)
+        report_path = out_path.parent / "qc_report.md"
+        
+        write_report(results, report_path)
+        if debug:
+            print(f"[QC] Report written to {report_path}")

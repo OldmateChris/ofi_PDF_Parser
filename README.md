@@ -13,6 +13,8 @@ Turn one or many PDFs into tidy CSV rows. If normal text extraction fails, it ca
   Optionally writes a simple **QC report** (`qc_report.md`) that highlights missing/odd values.
 * **Works on a single file or a whole folder**
   CLI is best for batches; GUI is easiest to click through.
+* **Responsive GUI**
+  The GUI runs processing in the background, so the window stays responsive even when parsing hundreds of files.
 
 ## Install
 
@@ -41,7 +43,7 @@ This will:
 
 ### Optional system tools (only if you use OCR)
 
-If you plan to use OCR fallback:
+If you plan to use OCR fallback (available for both Domestic and Export modes):
 
 * **Tesseract OCR** (binary `tesseract` on PATH)
 * **Poppler** (used by `pdf2image`; binaries like `pdftoppm` on PATH)
@@ -61,22 +63,26 @@ The CLI is exposed as the `parsingtool` command and uses subcommands for differe
 ```bash
 parsingtool domestic INPUT.pdf \
   --out-batches path/to/batches.csv \
-  --out-sscc path/to/sscc.csv
+  --out-sscc path/to/sscc.csv \
+  --ocr
 ```
 
 * `INPUT.pdf` – source Domestic ZAPI PDF.
 * `--out-batches` – output CSV for batch-level data.
 * `--out-sscc` – output CSV for SSCC data.
+* `--ocr` – (Optional) Enable OCR fallback if text extraction fails.
 
 #### Export PDFs → Single CSV
 
 ```bash
 parsingtool export INPUT.pdf \
-  --out path/to/export.csv
+  --out path/to/export.csv \
+  --ocr
 ```
 
 * `INPUT.pdf` – source Export order PDF.
 * `--out` – output CSV for all rows.
+* `--ocr` – (Optional) Enable OCR fallback if text extraction fails.
 
 You can always inspect available options with:
 
@@ -114,22 +120,23 @@ The GUI lets you:
 
 * Pick a single PDF or a folder of PDFs.
 * Choose an output folder.
-* Toggle options such as OCR, debug mode, and QC report generation (depending on what the current version of `gui.py` exposes).
+* Toggle options such as OCR (works for both modes), debug mode, and QC report generation.
+* **Process in background**: The UI remains responsive while processing files.
 
 When it finishes, it writes the CSV outputs (and optional QC report) into your chosen output folder and shows a brief summary.
 
 ## Outputs
 
-* One or more CSV files depending on the command and mode used.
-  For Domestic ZAPI PDFs, there are separate batch and SSCC CSVs.
-  For Export PDFs, there is a single CSV.
-* Optional QC report (e.g., `qc_report.md`) when enabled.
+* **Domestic ZAPI PDFs**: Generates two CSV files per input PDF (or merged if processing a folder):
+    * `*_batches.csv`: Batch-level details.
+    * `*_sscc.csv`: SSCC-level details.
+* **Export PDFs**: Generates a single CSV file with all order details.
+* **QC Report**: Optional markdown report (`qc_report.md`) highlighting potential issues (Export mode only).
 
 ## Project layout
 
 The high‑level layout for this version of the project is:
 
-```markdown
 ```text
 ParsingTool/
   ParsingTool/
@@ -137,15 +144,15 @@ ParsingTool/
       cli.py                  # command-line entry (subcommands: domestic, export)
       main.py                 # tiny launcher for the GUI
       gui.py                  # Tkinter app
-      zapi/                   # domestic ZAPI-specific parsing pipeline (if present)
-      export/                 # export order parsing pipeline (if present)
+      domestic_zapi/          # domestic ZAPI-specific parsing pipeline
+      export_orders/          # export order parsing pipeline
       __init__.py
   pyproject.toml              # project metadata, dependencies, console scripts
   README.md                   # this file
   tests/                      # tests and sample PDFs
 ```
 
-The exact internal modules (`zapi`, `export`, etc.) may vary, but `cli.py` and `main.py` are the primary entry points for the CLI and GUI, and `pyproject.toml` is the single source of truth for installation.
+The exact internal modules (`domestic_zapi`, `export_orders`, etc.) may vary, but `cli.py` and `main.py` are the primary entry points for the CLI and GUI, and `pyproject.toml` is the single source of truth for installation.
 
 ## Tips & next steps
 
