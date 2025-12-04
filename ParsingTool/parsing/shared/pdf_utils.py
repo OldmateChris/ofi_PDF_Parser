@@ -5,6 +5,10 @@ from typing import List, cast
 import fitz  # PyMuPDF
 import PyPDF2
 
+class NoTextError(RuntimeError):
+    """Raised when we can't get any usable text from a PDF."""
+    pass
+
 def extract_text(path: str, *, debug: bool = False, use_ocr: bool = False) -> str:
     pdf_path = Path(path)
     text = ""
@@ -30,7 +34,6 @@ def extract_text(path: str, *, debug: bool = False, use_ocr: bool = False) -> st
                 print(f"[warn] PyPDF2 failed: {e2}")
             text = ""
 
-    # Optional OCR fallback (if you want CLI to have it too)
     if use_ocr and not text.strip():
         try:
             from pdf2image import convert_from_path
@@ -45,4 +48,18 @@ def extract_text(path: str, *, debug: bool = False, use_ocr: bool = False) -> st
             if debug:
                 print(f"[warn] OCR failed: {e}")
 
-    return text.replace("\r\n", "\n").replace("\r", "\n")
+    # Normalise line endings
+    clean = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # If we still have no text, signal that this file basically
+    # needs OCR (image-only or corrupted).
+    if not clean.strip():
+        if debug:
+            print("[warn] No extractable text found in PDF")
+        if not use_ocr:
+            # Only raise this special error when OCR is disabled;
+            # with OCR enabled it's just a hard failure.
+            raise NoTextError(f"No extractable text in {pdf_path.name}")
+
+    return clean
+

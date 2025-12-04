@@ -239,7 +239,16 @@ def _parse_product_fields(product_lines: List[str]) -> dict:
 
 def run(*, input_pdf: str, out_batches: str, out_sscc: str, use_ocr: bool = False, debug: bool = False) -> None:
     # 1) Extract text
-    text = extract_text(input_pdf, use_ocr=use_ocr, debug=debug)
+    # Build keyword arguments only for options that are actually enabled.
+    # This keeps the function friendly for tests or callers that
+    # replace `extract_text` with a simpler version that only
+    # expects the path argument, while still letting us opt in to OCR.
+    kwargs = {}
+    if use_ocr:
+        kwargs["use_ocr"] = True
+    if debug:
+        kwargs["debug"] = True
+    text = extract_text(input_pdf, **kwargs)
 
     # 2) Headers
     H = _parse_headers(text)

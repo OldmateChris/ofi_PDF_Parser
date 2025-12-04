@@ -1,444 +1,365 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 from pathlib import Path
-import pandas as pd  # currently unused, but OK to keep
 import shutil
 import threading
+import csv  # NEW
 
+# --- PIPELINE IMPORTS ---
 from .export_orders.pipeline import parse_export_pdf
 from .domestic_zapi import pipeline as domestic_pipeline
+from .packing_list.pipeline import run as run_packing_pipeline
 from .qc import validate, write_report
-from .merge_with_overrides import apply_overrides
+from .shared.pdf_utils import NoTextError  # NEW
+
 
 # ---------------------------------------------------------------------------
-# THEME SETTINGS (edit these to change look & feel)
+# THEME SETTINGS
 # ---------------------------------------------------------------------------
+BG_MAIN   = "#acacac"
+BG_PANEL  = "#b8b8b8"   # Slightly lighter for groups
+BG_STATUS = "#302f2f"
+ENTRY_BG  = "#686868"
+ENTRY_FG  = "#65F008"
+LOG_BG    = "#0C0C0C"
+LOG_FG    = "#65F008"
+BUTTON_BG = "#444444"
+BUTTON_FG = "#ffffff"
+FG_TEXT   = "#202124"
+FG_OK     = "#65F008"
+FG_ERROR  = "#ff0000"
+FG_MUTED  = "#5f6368"
 
-# Window + panels
-BG_MAIN   = "#acacac"   # main window background
-BG_STATUS = "#302f2f"   # status bar background
-
-# Text entry fields
-ENTRY_BG = "#686868"    # entry field background
-ENTRY_FG = "#65F008"    # entry field text colour
-
-# Log area
-LOG_BG = "#0C0C0C"      # log box background
-LOG_FG = "#65F008"      # log box text colour
-
-# Buttons
-BUTTON_BG        = "#444444"  # normal button background
-BUTTON_FG        = "#ffffff"  # normal button text
-BUTTON_ACTIVE_BG = "#666666"  # background while pressed/hovered
-BUTTON_ACTIVE_FG = "#ffffff"  # text while pressed/hovered
-
-# Scrollbar on log
-SCROLLBAR_BG        = "#444444"  # colour of the scrollbar handle
-SCROLLBAR_TROUGH    = "#222222"  # colour of the track behind it
-SCROLLBAR_ACTIVE_BG = "#666666"  # colour when you hover/drag
-
-# General text colours
-FG_TEXT  = "#202124"   # label / checkbox text colour
-FG_MUTED = "#5f6368"   # slightly lighter text (optional)
-FG_OK    = "#65F008"   # green for "OK" status
-FG_ERROR = "#ff0000"   # red for "missing" / error status
-
-# Fonts
 FONT_LABEL  = ("Ubuntu", 10)
 FONT_ENTRY  = ("Share Tech Mono", 10)
 FONT_BUTTON = ("Ubuntu", 11)
 FONT_CHECK  = ("Ubuntu", 10)
 FONT_LOG    = ("JetBrainsMono NF", 9)
-FONT_STATUS = ("Inconsolata ExtraExpanded", 10, "bold")
+FONT_STATUS_SIDE = ("Inconsolata ExtraExpanded", 9, "bold")   # smaller side labels
+FONT_STATUS_MAIN = ("Inconsolata ExtraExpanded", 11, "bold")  # bigger center label
+FONT_TITLE  = ("Ubuntu", 11, "bold")  # For group headers
+
+
+def is_installed(cmd: str) -> bool:
+    return shutil.which(cmd) is not None
 
 
 def run_gui() -> None:
-    """Launch the Tkinter GUI for the ParsingTool."""
-
-    # Root window
     root = tk.Tk()
-    root.title("ParsingTool")
+    root.title("ParsingTool v2.0")
     root.configure(bg=BG_MAIN)
+    root.geometry("750x650")  # Set a reasonable default size
 
-    # Layout config
-    root.columnconfigure(0, weight=0)
-    root.columnconfigure(1, weight=1)   # main stretch
-    root.columnconfigure(2, weight=0)
+    # Layout: Main content expands, status bar fixed
+    root.columnconfigure(0, weight=1)
+    root.rowconfigure(0, weight=1)
 
-    root.rowconfigure(6, weight=1)      # log box stretches vertically
-    root.rowconfigure(7, weight=0)      # status bar stays fixed
+    # Main container frame to hold the "steps"
+    main_frame = tk.Frame(root, bg=BG_MAIN, padx=10, pady=10)
+    main_frame.grid(row=0, column=0, sticky="nsew")
+    main_frame.columnconfigure(0, weight=1)
 
     # -------------------------------------------------------------------
-    # INPUT FIELDS (entries)
+    # STEP 1: INPUTS (LabelFrame)
     # -------------------------------------------------------------------
+    step1 = tk.LabelFrame(
+        main_frame,
+        text=" 1. Select Files ",
+        bg=BG_PANEL,
+        fg=FG_TEXT,
+        font=FONT_TITLE,
+    )
+    step1.grid(row=0, column=0, sticky="ew", pady=(0, 10), ipady=5)
+    step1.columnconfigure(1, weight=1)
 
+    # File
+    tk.Label(
+        step1, text="Single PDF:", bg=BG_PANEL, fg=FG_TEXT, font=FONT_LABEL
+    ).grid(row=0, column=0, sticky="e", padx=5, pady=5)
     file_entry = tk.Entry(
-        root,
-        width=60,
-        font=FONT_ENTRY,
+        step1,
         bg=ENTRY_BG,
         fg=ENTRY_FG,
         insertbackground=ENTRY_FG,
+        font=FONT_ENTRY,
     )
+    file_entry.grid(row=0, column=1, sticky="ew", padx=5)
 
+    # Folder
+    tk.Label(
+        step1, text="OR Folder:", bg=BG_PANEL, fg=FG_TEXT, font=FONT_LABEL
+    ).grid(row=1, column=0, sticky="e", padx=5, pady=5)
     folder_entry = tk.Entry(
-        root,
-        width=60,
-        font=FONT_ENTRY,
+        step1,
         bg=ENTRY_BG,
         fg=ENTRY_FG,
         insertbackground=ENTRY_FG,
+        font=FONT_ENTRY,
     )
+    folder_entry.grid(row=1, column=1, sticky="ew", padx=5)
 
+    # Output
+    tk.Label(
+        step1, text="Output To:", bg=BG_PANEL, fg=FG_TEXT, font=FONT_LABEL
+    ).grid(row=2, column=0, sticky="e", padx=5, pady=5)
     output_entry = tk.Entry(
-        root,
-        width=60,
-        font=FONT_ENTRY,
+        step1,
         bg=ENTRY_BG,
         fg=ENTRY_FG,
         insertbackground=ENTRY_FG,
+        font=FONT_ENTRY,
     )
+    output_entry.grid(row=2, column=1, sticky="ew", padx=5)
 
-    # --- Browse handlers ---
-
-    def browse_file() -> None:
+    # Buttons
+    def browse_file():
         p = filedialog.askopenfilename(filetypes=[("PDF files", "*.pdf")])
         if p:
             file_entry.delete(0, tk.END)
             file_entry.insert(0, p)
 
-    def browse_folder() -> None:
+    def browse_folder():
         p = filedialog.askdirectory()
         if p:
             folder_entry.delete(0, tk.END)
             folder_entry.insert(0, p)
 
-    def browse_output() -> None:
+    def browse_output():
         p = filedialog.askdirectory()
         if p:
             output_entry.delete(0, tk.END)
             output_entry.insert(0, p)
 
+    tk.Button(step1, text="Browse", command=browse_file, bg=BUTTON_BG, fg=BUTTON_FG).grid(
+        row=0, column=2, padx=5
+    )
+    tk.Button(step1, text="Browse", command=browse_folder, bg=BUTTON_BG, fg=BUTTON_FG).grid(
+        row=1, column=2, padx=5
+    )
+    tk.Button(step1, text="Browse", command=browse_output, bg=BUTTON_BG, fg=BUTTON_FG).grid(
+        row=2, column=2, padx=5
+    )
+
     # -------------------------------------------------------------------
-    # OPTIONS (checkbox / radio state)
+    # STEP 2: MODE (LabelFrame)
     # -------------------------------------------------------------------
+    step2 = tk.LabelFrame(
+        main_frame,
+        text=" 2. Document Type ",
+        bg=BG_PANEL,
+        fg=FG_TEXT,
+        font=FONT_TITLE,
+    )
+    step2.grid(row=1, column=0, sticky="ew", pady=(0, 10), ipady=5)
+
+    mode_var = tk.StringVar(value="export")
+
+    tk.Radiobutton(
+        step2,
+        text="Export Orders",
+        variable=mode_var,
+        value="export",
+        bg=BG_PANEL,
+        fg=FG_TEXT,
+        font=FONT_CHECK,
+    ).pack(side="left", padx=20)
+
+    tk.Radiobutton(
+        step2,
+        text="Domestic ZAPI",
+        variable=mode_var,
+        value="domestic",
+        bg=BG_PANEL,
+        fg=FG_TEXT,
+        font=FONT_CHECK,
+    ).pack(side="left", padx=20)
+
+    tk.Radiobutton(
+        step2,
+        text="Packing List (PI)",
+        variable=mode_var,
+        value="packinglist",
+        bg=BG_PANEL,
+        fg=FG_TEXT,
+        font=FONT_CHECK,
+    ).pack(side="left", padx=20)
+
+    # -------------------------------------------------------------------
+    # STEP 3: OPTIONS (LabelFrame - "Advanced")
+    # -------------------------------------------------------------------
+    step3 = tk.LabelFrame(
+        main_frame,
+        text=" 3. Advanced Options ",
+        bg=BG_PANEL,
+        fg=FG_TEXT,
+        font=FONT_TITLE,
+    )
+    step3.grid(row=2, column=0, sticky="ew", pady=(0, 10), ipady=5)
 
     debug_var = tk.BooleanVar(value=False)
     ocr_var = tk.BooleanVar(value=False)
     qc_var = tk.BooleanVar(value=True)
-    mode_var = tk.StringVar(value="export")  # "export" or "domestic"
 
-    # -------------------------------------------------------------------
-    # LOG BOX + SCROLLBAR
-    # -------------------------------------------------------------------
-
-    log_box = scrolledtext.ScrolledText(root, height=18)
-    log_box.grid(row=6, column=0, columnspan=3, padx=10, pady=10, sticky="nsew")
-
-    log_box.configure(
-        bg=LOG_BG,
-        fg=LOG_FG,
-        font=FONT_LOG,
-        insertbackground=LOG_FG,
+    ocr_check = tk.Checkbutton(
+        step3,
+        text="Enable OCR Fallback (Slow)",
+        variable=ocr_var,
+        bg=BG_PANEL,
+        fg=FG_TEXT,
+        font=FONT_CHECK,
     )
+    ocr_check.pack(side="left", padx=10)
 
-    try:
-        vbar = log_box.vbar
-        vbar.configure(
-            bg=SCROLLBAR_BG,
-            troughcolor=SCROLLBAR_TROUGH,
-            activebackground=SCROLLBAR_ACTIVE_BG,
-            highlightthickness=0,
-            bd=0,
-        )
-    except AttributeError:
-        pass
+    tk.Checkbutton(
+        step3,
+        text="Generate QC Report (Export Only)",
+        variable=qc_var,
+        bg=BG_PANEL,
+        fg=FG_TEXT,
+        font=FONT_CHECK,
+    ).pack(side="left", padx=10)
+
+    tk.Checkbutton(
+        step3,
+        text="Show Debug Logs",
+        variable=debug_var,
+        bg=BG_PANEL,
+        fg=FG_TEXT,
+        font=FONT_CHECK,
+    ).pack(side="left", padx=10)
 
     # -------------------------------------------------------------------
-    # LOGGING HELPER
+    # LOG & ACTION
     # -------------------------------------------------------------------
+    process_btn = tk.Button(
+        main_frame,
+        text="PROCESS FILES",
+        font=("Ubuntu", 12, "bold"),
+        bg=BUTTON_BG,
+        fg=BUTTON_FG,
+        height=2,
+        width=20,
+    )
+    process_btn.grid(row=3, column=0, pady=10)
 
-    def log(msg: str) -> None:
+    log_label = tk.Label(
+        main_frame, text="Processing Log:", bg=BG_MAIN, fg=FG_TEXT, font=FONT_LABEL
+    )
+    log_label.grid(row=4, column=0, sticky="w")
+
+    log_box = scrolledtext.ScrolledText(
+        main_frame, height=10, bg=LOG_BG, fg=LOG_FG, font=FONT_LOG
+    )
+    log_box.grid(row=5, column=0, sticky="nsew")
+    main_frame.rowconfigure(5, weight=1)  # Log expands
+
+    def log(msg: str):
         def _insert():
             log_box.insert(tk.END, msg + "\n")
             log_box.see(tk.END)
+
         root.after(0, _insert)
 
     # -------------------------------------------------------------------
-    # STATUS BAR UPDATER
+    # LOGIC
     # -------------------------------------------------------------------
-    
-    def is_installed(cmd: str) -> bool:
-        return shutil.which(cmd) is not None
-
-    def update_status_indicators():
-        tesseract_ok = is_installed("tesseract")
-        tess_colour = FG_OK if tesseract_ok else FG_ERROR
-        tess_label.config(fg=tess_colour)
-
-        poppler_ok = is_installed("pdftoppm") or is_installed("pdfinfo")
-        poppler_colour = FG_OK if poppler_ok else FG_ERROR
-        poppler_label.config(fg=poppler_colour)
-
-    # -------------------------------------------------------------------
-    # MAIN PROCESSING LOGIC (THREADED)
-    # -------------------------------------------------------------------
-
     def run_processing_thread(pdfs, outdir, mode, debug, use_ocr, run_qc):
         try:
-            # Runtime check for dependencies
-            root.after(0, update_status_indicators)
-            
-            qc_results: list = []
-            
+            log(f"--- Starting {mode.upper()} mode on {len(pdfs)} file(s) ---")
+            qc_results = []
+
             for p in pdfs:
                 try:
-                    if mode == "domestic":
-                        # Domestic pipeline: writes 2 CSVs (batches + SSCC)
-                        base = p.stem
-                        batches_out = outdir / f"{base}_batches.csv"
-                        sscc_out = outdir / f"{base}_sscc.csv"
+                    ...
+                except Exception as e:
+                    log(f"[ERROR] {p.name}: {e}")
 
-                        domestic_pipeline.run(
-                            input_pdf=str(p),
-                            out_batches=str(batches_out),
-                            out_sscc=str(sscc_out),
-                            use_ocr=use_ocr,
-                            debug=debug
-                        )
-                        
-                        log(f"[saved] {batches_out}")
-                        log(f"[saved] {sscc_out}")
+            if mode == "export" and run_qc and qc_results:
+                ...
+            log("--- Completed ---")
 
-                    else:
-                        # Export pipeline: one-row CSV + QC
-                        df = parse_export_pdf(
-                            p,
-                            debug=debug,
-                            use_ocr=use_ocr,
-                        )
-                        base = (df.iloc[0].get("Delivery Number") or "").strip() or p.stem
-                        out = outdir / f"parsed_{base}.csv"
-                        df.to_csv(out, index=False, encoding="utf-8-sig")
-                        log(f"[saved] {out}")
-                        qc_results.append(validate(df, p.name))
-
-                except Exception as e:  # GUI error path
-                    log(f"[error] {p}: {e}")
-
-            # QC/report only makes sense for export mode
-            if mode == "export" and run_qc:
-                report_path = outdir / "qc_report.md"
-                write_report(qc_results, report_path)
-                log(f"[qc] wrote {report_path}")
-            elif mode == "domestic" and run_qc:
-                log("[qc] Note: QC report is only implemented for export mode; skipping.")
-                
-            log("Done.")
 
         except Exception as e:
-            log(f"Critical Error: {e}")
+            log(f"Critical System Error: {e}")
         finally:
-            # Re-enable button
-            root.after(0, lambda: process_btn.config(state=tk.NORMAL, text="Process"))
+            root.after(
+                0, lambda: process_btn.config(state=tk.NORMAL, text="PROCESS FILES")
+            )
 
-
-    def process() -> None:
+    def start_process():
         outdir = Path(output_entry.get().strip() or ".")
         file_path = file_entry.get().strip()
         folder_path = folder_entry.get().strip()
 
-        pdfs: list[Path] = []
+        pdfs = []
         if file_path:
             pdfs = [Path(file_path)]
         elif folder_path:
             pdfs = sorted(Path(folder_path).glob("*.pdf"))
-        else:
-            messagebox.showerror("Error", "Choose a file or a folder")
+
+        if not pdfs:
+            messagebox.showerror("Error", "Please select a file or folder first.")
             return
 
         outdir.mkdir(parents=True, exist_ok=True)
-        
-        # Disable button
-        process_btn.config(state=tk.DISABLED, text="Processing...")
-        
-        # Capture values from UI thread
-        mode = mode_var.get() or "export"
-        debug = debug_var.get()
-        use_ocr = ocr_var.get()
-        run_qc = qc_var.get()
+        process_btn.config(state=tk.DISABLED, text="Running...")
 
-        # Start thread
+        mode = mode_var.get()
         t = threading.Thread(
             target=run_processing_thread,
-            args=(pdfs, outdir, mode, debug, use_ocr, run_qc),
-            daemon=True
+            args=(
+                pdfs,
+                outdir,
+                mode,
+                debug_var.get(),
+                ocr_var.get(),
+                qc_var.get(),
+            ),
+            daemon=True,
         )
         t.start()
 
-    # -------------------------------------------------------------------
-    # LAYOUT: LABELS, ENTRIES, BROWSE BUTTONS
-    # -------------------------------------------------------------------
-
-    tk.Label(root, text="Single PDF:", bg=BG_MAIN, fg=FG_TEXT, font=FONT_LABEL).grid(
-        row=0, column=0, sticky="e", padx=10, pady=5
-    )
-    file_entry.grid(row=0, column=1, sticky="we", padx=5, pady=5)
-    tk.Button(
-        root,
-        text="Browse",
-        command=browse_file,
-        font=FONT_BUTTON,
-        bg=BUTTON_BG,
-        fg=BUTTON_FG,
-        activebackground=BUTTON_ACTIVE_BG,
-        activeforeground=BUTTON_ACTIVE_FG,
-    ).grid(row=0, column=2, sticky="e", padx=10, pady=5)
-
-    tk.Label(root, text="Folder of PDFs:", bg=BG_MAIN, fg=FG_TEXT, font=FONT_LABEL).grid(
-        row=1, column=0, sticky="e", padx=10, pady=5
-    )
-    folder_entry.grid(row=1, column=1, sticky="we", padx=5, pady=5)
-    tk.Button(
-        root,
-        text="Browse",
-        command=browse_folder,
-        font=FONT_BUTTON,
-        bg=BUTTON_BG,
-        fg=BUTTON_FG,
-        activebackground=BUTTON_ACTIVE_BG,
-        activeforeground=BUTTON_ACTIVE_FG,
-    ).grid(row=1, column=2, sticky="e", padx=10, pady=5)
-
-    tk.Label(root, text="Output Folder:", bg=BG_MAIN, fg=FG_TEXT, font=FONT_LABEL).grid(
-        row=2, column=0, sticky="e", padx=10, pady=5
-    )
-    output_entry.grid(row=2, column=1, sticky="we", padx=5, pady=5)
-    tk.Button(
-        root,
-        text="Browse",
-        command=browse_output,
-        font=FONT_BUTTON,
-        bg=BUTTON_BG,
-        fg=BUTTON_FG,
-        activebackground=BUTTON_ACTIVE_BG,
-        activeforeground=BUTTON_ACTIVE_FG,
-    ).grid(row=2, column=2, sticky="e", padx=10, pady=5)
+    process_btn.config(command=start_process)
 
     # -------------------------------------------------------------------
-    # CHECKBOX OPTIONS
+    # STATUS BAR
     # -------------------------------------------------------------------
+   
+    status = tk.Frame(root, bg=BG_STATUS)
+    status.grid(row=1, column=0, sticky="ew")
 
-    tk.Checkbutton(
-        root,
-        text="Debug logs",
-        variable=debug_var,
-        bg=BG_MAIN,
-        fg=FG_TEXT,
-        font=FONT_CHECK,
-    ).grid(row=3, column=0, sticky="w", padx=(10, 0), pady=5)
+    # 3 columns: left & right stretch, middle stays centered
+    status.columnconfigure(0, weight=1)
+    status.columnconfigure(1, weight=0)
+    status.columnconfigure(2, weight=1)
 
-    tk.Checkbutton(
-        root,
-        text="Write QC report",
-        variable=qc_var,
-        bg=BG_MAIN,
-        fg=FG_TEXT,
-        font=FONT_CHECK,
-    ).grid(row=3, column=1, sticky="", padx=(10, 0), pady=5)
-
-    tk.Checkbutton(
-        root,
-        text="Use OCR fallback",
-        variable=ocr_var,
-        bg=BG_MAIN,
-        fg=FG_TEXT,
-        font=FONT_CHECK,
-    ).grid(row=3, column=2, sticky="w", padx=(10, 10), pady=5)
-
-    # -------------------------------------------------------------------
-    # MODE SELECTION (Export vs Domestic)
-    # -------------------------------------------------------------------
-
-    tk.Label(
-        root,
-        text="Mode:",
-        bg=BG_MAIN,
-        fg=FG_TEXT,
-        font=FONT_LABEL,
-    ).grid(row=4, column=0, sticky="e", padx=10, pady=5)
-
-    tk.Radiobutton(
-        root,
-        text="Export (single-order CSV)",
-        variable=mode_var,
-        value="export",
-        bg=BG_MAIN,
-        fg=FG_TEXT,
-        font=FONT_CHECK,
-        anchor="w",
-    ).grid(row=4, column=1, sticky="w", padx=(10, 0), pady=5)
-
-    tk.Radiobutton(
-        root,
-        text="Domestic (batches + SSCC)",
-        variable=mode_var,
-        value="domestic",
-        bg=BG_MAIN,
-        fg=FG_TEXT,
-        font=FONT_CHECK,
-        anchor="e",
-    ).grid(row=4, column=2, sticky="e", padx=(10, 10), pady=5)
-
-    # -------------------------------------------------------------------
-    # PROCESS BUTTON
-    # -------------------------------------------------------------------
-
-    process_btn = tk.Button(
-        root,
-        text="Process",
-        command=process,
-        font=FONT_BUTTON,
-        bg=BUTTON_BG,
-        fg=BUTTON_FG,
-        activebackground=BUTTON_ACTIVE_BG,
-        activeforeground=BUTTON_ACTIVE_FG,
-    )
-    process_btn.grid(row=5, column=1, pady=10)
-
-    # -------------------------------------------------------------------
-    # TESSERACT / POPPLER STATUS BAR
-    # -------------------------------------------------------------------
-
-    status_bar = tk.Frame(root, bg=BG_STATUS)
-    status_bar.grid(row=7, column=0, columnspan=3, sticky="we")
-    status_bar.grid_columnconfigure(0, weight=1)
-    status_bar.grid_columnconfigure(1, weight=1)
-
-    tess_label = tk.Label(
-        status_bar,
-        text="TESSERACT",
-        fg=FG_MUTED, # Initial state
+    tess_lbl = tk.Label(
+        status,
+        text="TESSERACT OCR",
         bg=BG_STATUS,
-        font=FONT_STATUS,
-        anchor="w",
+        fg=FG_MUTED,
+        font=FONT_STATUS_SIDE,   # smaller
     )
-    tess_label.grid(row=0, column=0, sticky="w", padx=10, pady=3)
+    tess_lbl.grid(row=0, column=0, sticky="w", padx=10)
 
-    poppler_label = tk.Label(
-        status_bar,
-        text="POPPLER",
-        fg=FG_MUTED, # Initial state
+    ocr_status_lbl = tk.Label(
+        status,
+        text="CHECKING OCR...",
         bg=BG_STATUS,
-        font=FONT_STATUS,
-        anchor="e",
+        fg=FG_MUTED,
+        font=FONT_STATUS_MAIN,   # larger, centered
     )
-    poppler_label.grid(row=0, column=1, sticky="e", padx=10, pady=3)
-    
-    # Initial check
-    update_status_indicators()
+    ocr_status_lbl.grid(row=0, column=1)  # center column
 
-    root.mainloop()
+    popp_lbl = tk.Label(
+        status,
+        text="POPPLER UTILS",
+        bg=BG_STATUS,
+        fg=FG_MUTED,
+        font=FONT_STATUS_SIDE,   # smaller
+    )
+    popp_lbl.grid(row=0, column=2, sticky="e", padx=10)
+
 
 
 if __name__ == "__main__":

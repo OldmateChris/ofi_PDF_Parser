@@ -1,7 +1,7 @@
 import argparse, sys
 from .domestic_zapi.pipeline import run as run_domestic
 from .export_orders.pipeline import run as run_export
-
+from .packing_list.pipeline import run as run_packing_list
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="parsingtool", description="Parsing Tool CLI")
@@ -14,12 +14,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_dom.add_argument("--ocr", action="store_true", help="Enable OCR fallback")
     p_dom.add_argument("--debug", action="store_true", help="Enable debug logging")
 
-    p_exp = sub.add_parser("export", help="Parse Export PDF (placeholder)")
+    p_exp = sub.add_parser("export", help="Parse Export PDF into CSV (+ optional QC report)")
+
     p_exp.add_argument("input_pdf")
     p_exp.add_argument("--out", required=True)
     p_exp.add_argument("--ocr", action="store_true", help="Enable OCR fallback")
     p_exp.add_argument("--debug", action="store_true", help="Enable debug logging")
     p_exp.add_argument("--qc", action="store_true", help="Generate QC report")
+
+    p_pl = sub.add_parser("packinglist", help="Parse Packing List (_PI.pdf)")
+    p_pl.add_argument("input_pdf")
+    p_pl.add_argument("--out", required=True)
+    p_pl.add_argument("--ocr", action="store_true")
+    p_pl.add_argument("--debug", action="store_true")
     return p
 
 
@@ -55,6 +62,15 @@ def main() -> None:
             use_ocr=args.ocr,
             debug=args.debug,
             generate_qc=args.qc,
+        )
+        return
+    
+    if args.command == "packinglist":
+        run_packing_list(
+            input_pdf=args.input_pdf,
+            out=args.out,
+            use_ocr=args.ocr,
+            debug=args.debug,
         )
         return
 
