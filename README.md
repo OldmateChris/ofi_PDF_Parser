@@ -43,7 +43,7 @@ This will:
 
 ### Optional system tools (only if you use OCR)
 
-If you plan to use OCR fallback (available for both Domestic and Export modes):
+If you plan to use OCR fallback (available for Domestic, Export and Packing List modes):
 
 * **Tesseract OCR** (binary `tesseract` on PATH)
 * **Poppler** (used by `pdf2image`; binaries like `pdftoppm` on PATH)
@@ -84,12 +84,25 @@ parsingtool export INPUT.pdf \
 * `--out` – output CSV for all rows.
 * `--ocr` – (Optional) Enable OCR fallback if text extraction fails.
 
+#### Packing List PDFs → Single CSV
+
+```bash
+parsingtool packinglist INPUT.pdf \
+  --out path/to/packing_list.csv \
+  --ocr
+```
+
+* `INPUT.pdf` – source Packing List PDF (e.g. `*_PI.pdf`).
+* `--out` – output CSV for packing list details.
+* `--ocr` – (Optional) Enable OCR fallback if text extraction fails.
+
 You can always inspect available options with:
 
 ```bash
 parsingtool --help
 parsingtool domestic --help
 parsingtool export --help
+parsingtool packinglist --help
 ```
 
 #### Running without installing console scripts (alternative)
@@ -100,6 +113,8 @@ If you prefer not to install console entry points, you can run via the module di
 python -m ParsingTool.parsing.cli domestic INPUT.pdf --out-batches path/to/batches.csv --out-sscc path/to/sscc.csv
 
 python -m ParsingTool.parsing.cli export INPUT.pdf --out path/to/export.csv
+
+python -m ParsingTool.parsing.cli packinglist INPUT.pdf --out path/to/packing_list.csv
 ```
 
 ### GUI (simple window)
@@ -113,14 +128,14 @@ parsingtool-gui
 or, equivalently from the project root:
 
 ```bash
-python -m ParsingTool.parsing.main
+python -m ParsingTool.main
 ```
 
 The GUI lets you:
 
 * Pick a single PDF or a folder of PDFs.
 * Choose an output folder.
-* Toggle options such as OCR (works for both modes), debug mode, and QC report generation.
+* Toggle options such as OCR (works for all modes), debug mode, and QC report generation.
 * **Process in background**: The UI remains responsive while processing files.
 
 When it finishes, it writes the CSV outputs (and optional QC report) into your chosen output folder and shows a brief summary.
@@ -128,9 +143,11 @@ When it finishes, it writes the CSV outputs (and optional QC report) into your c
 ## Outputs
 
 * **Domestic ZAPI PDFs**: Generates two CSV files per input PDF (or merged if processing a folder):
-    * `*_batches.csv`: Batch-level details.
-    * `*_sscc.csv`: SSCC-level details.
+
+  * `*_batches.csv`: Batch-level details.
+  * `*_sscc.csv`: SSCC-level details.
 * **Export PDFs**: Generates a single CSV file with all order details.
+* **Packing List PDFs**: Generates a single CSV file with packing list details.
 * **QC Report**: Optional markdown report (`qc_report.md`) highlighting potential issues (Export mode only).
 
 ## Project layout
@@ -140,19 +157,22 @@ The high‑level layout for this version of the project is:
 ```text
 ParsingTool/
   ParsingTool/
+    __init__.py
+    main.py                 # tiny launcher for the GUI
     parsing/
-      cli.py                  # command-line entry (subcommands: domestic, export)
-      main.py                 # tiny launcher for the GUI
-      gui.py                  # Tkinter app
-      domestic_zapi/          # domestic ZAPI-specific parsing pipeline
-      export_orders/          # export order parsing pipeline
+      cli.py                # command-line entry (subcommands: domestic, export, packinglist)
+      gui.py                # Tkinter app
+      domestic_zapi/        # domestic ZAPI-specific parsing pipeline
+      export_orders/        # export order parsing pipeline
+      packing_list/         # packing list parsing pipeline
+      shared/               # shared helpers (PDF, dates, CSV, patterns, etc.)
       __init__.py
-  pyproject.toml              # project metadata, dependencies, console scripts
-  README.md                   # this file
-  tests/                      # tests and sample PDFs
+  pyproject.toml            # project metadata, dependencies, console scripts
+  README.md                 # this file
+  tests/                    # tests and sample PDFs
 ```
 
-The exact internal modules (`domestic_zapi`, `export_orders`, etc.) may vary, but `cli.py` and `main.py` are the primary entry points for the CLI and GUI, and `pyproject.toml` is the single source of truth for installation.
+The exact internal modules (`domestic_zapi`, `export_orders`, `packing_list`, etc.) may vary, but `cli.py` and `main.py` are the primary entry points for the CLI and GUI, and `pyproject.toml` is the single source of truth for installation.
 
 ## Tips & next steps
 
