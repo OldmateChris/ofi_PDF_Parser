@@ -29,7 +29,7 @@ HEADER_PATTERNS = {
 # -----------------------------
 BATCH_RE = re.compile(r"\b(F\d{6,})\b", re.IGNORECASE)
 PAL_RE = re.compile(r"\b(\d+)\s*PAL\b", re.IGNORECASE)
-SSCC_RE = re.compile(r"\b(\d{18,20})\b")  # 18-20 digit codes
+SSCC_RE = re.compile(r"\b(?:[A-Za-z]+)?(\d{18,20})\b")  # 18-20 digits, optional prefix
 SIZE_RE = re.compile(r"\b(\d{2}/\d{2})\b")
 
 # Packaging patterns to cover: "12.5KG ctn", "1T bag", "850KG D-Sp", etc.
@@ -47,7 +47,7 @@ KNOWN_GRADES = [
     "XNo1",
 ]
 # Broad fallback (after trying explicit patterns) — keeps previous behaviour for 2–4 letter codes
-GRADE_TOKEN_RE = re.compile(r"\b([A-Z]{2,4})\b")
+GRADE_TOKEN_RE = re.compile(r"\b(SSR|SUPR|XNO1|NP)\b")
 
 
 # -----------------------------
